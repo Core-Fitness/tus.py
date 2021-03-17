@@ -4,6 +4,9 @@ import base64
 import logging
 import argparse
 import sys
+import warnings
+
+warnings.filterwarnings('once', module='urllib3')
 
 try:
     from urllib.parse import urlparse, urlunparse

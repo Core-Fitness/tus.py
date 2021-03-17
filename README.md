@@ -51,3 +51,11 @@ with open(FILE_PATH, 'rb') as f:
 ```
 
 If you want resume feature use `tus.create()` and `tus.resume()` functions.
+
+# Developing
+
+You can install the development version using: `python setup.py install --force`
+
+However, be sure to pip uninstall any previous version or you won't be running
+your dev version
+

@@ -23,16 +23,16 @@ logger.addHandler(logging.NullHandler())
 
 class TusError(Exception):
     def __init__(self, message, response=None):
-        super(TusError, self).__init__(message)
+        self.message = message
+        super().__init__(message)
         self.response = response
 
     def __str__(self):
         if self.response is not None:
-            text = self.response.text
             return "TusError('%s', response=(%s, '%s'))" % (
-                    self.message,
-                    self.response.status_code,
-                    text.strip())
+                self.message,
+                self.response.status_code,
+                self.response.text.strip())
         else:
             return "TusError('%s')" % self.message
 
@@ -63,6 +63,8 @@ def _create_parent_parser():
     parser = argparse.ArgumentParser()
     parser.add_argument('file', type=argparse.FileType('rb'))
     parser.add_argument('--chunk-size', type=int, default=DEFAULT_CHUNK_SIZE)
+    parser.add_argument('-k', '--insecure', action='store_true',
+                        help="Like curl's flags, ignore self-signed SSL certificates")
     parser.add_argument(
         '--header',
         dest='headers',
@@ -98,7 +100,9 @@ def _cmd_upload():
         file_name,
         file_size,
         headers=args.headers,
-        metadata=args.metadata)
+        metadata=args.metadata,
+        should_verify=(not args.insecure)
+    )
 
     print(file_endpoint)
 
@@ -107,7 +111,9 @@ def _cmd_upload():
         file_endpoint,
         chunk_size=args.chunk_size,
         headers=args.headers,
-        offset=0)
+        offset=0,
+        should_verify=(not args.insecure)
+    )
 
 
 def _cmd_resume():
@@ -179,7 +185,7 @@ def _absolute_file_location(tus_endpoint, file_endpoint):
     ) + parsed_file_endpoint[2:])
 
 
-def create(tus_endpoint, file_name, file_size, headers=None, metadata=None):
+def create(tus_endpoint, file_name, file_size, headers=None, metadata=None, should_verify=True):
     logger.info("Creating file endpoint")
 
     h = {"Tus-Resumable": TUS_VERSION}
@@ -203,7 +209,7 @@ def create(tus_endpoint, file_name, file_size, headers=None, metadata=None):
     ]
     h["Upload-Metadata"] = ','.join(pairs)
 
-    response = requests.post(tus_endpoint, headers=h)
+    response = requests.post(tus_endpoint, headers=h, verify=should_verify)
     if response.status_code != 201:
         raise TusError("Create failed", response=response)
 
@@ -216,10 +222,12 @@ def resume(file_obj,
            file_endpoint,
            chunk_size=DEFAULT_CHUNK_SIZE,
            headers=None,
-           offset=None):
+           offset=None,
+           should_verify=True):
 
     if offset is None:
-        offset = _get_offset(file_endpoint, headers=headers)
+        offset = _get_offset(file_endpoint, headers=headers,
+                             should_verify=should_verify)
 
     if offset != 0:
         if not _is_seekable(file_obj):
@@ -230,7 +238,8 @@ def resume(file_obj,
     total_sent = 0
     data = file_obj.read(chunk_size)
     while data:
-        _upload_chunk(data, offset, file_endpoint, headers=headers)
+        _upload_chunk(data, offset, file_endpoint,
+                      headers=headers, should_verify=should_verify)
         total_sent += len(data)
         logger.info("Total bytes sent: %i", total_sent)
         offset += len(data)
@@ -243,10 +252,11 @@ def resume(file_obj,
             headers = dict(headers)
 
         headers['Upload-Length'] = str(offset)
-        _upload_chunk('', offset, file_endpoint, headers=headers)
+        _upload_chunk('', offset, file_endpoint, headers=headers,
+                      should_verify=should_verify)
 
 
-def _get_offset(file_endpoint, headers=None):
+def _get_offset(file_endpoint, headers=None, should_verify=True):
     logger.info("Getting offset")
 
     h = {"Tus-Resumable": TUS_VERSION}
@@ -254,7 +264,7 @@ def _get_offset(file_endpoint, headers=None):
     if headers:
         h.update(headers)
 
-    response = requests.head(file_endpoint, headers=h)
+    response = requests.head(file_endpoint, headers=h, verify=should_verify)
     response.raise_for_status()
 
     offset = int(response.headers["Upload-Offset"])
@@ -262,7 +272,7 @@ def _get_offset(file_endpoint, headers=None):
     return offset
 
 
-def _upload_chunk(data, offset, file_endpoint, headers=None):
+def _upload_chunk(data, offset, file_endpoint, headers=None, should_verify=True):
     logger.info("Uploading %d bytes chunk from offset: %i", len(data), offset)
 
     h = {
@@ -274,6 +284,8 @@ def _upload_chunk(data, offset, file_endpoint, headers=None):
     if headers:
         h.update(headers)
 
-    response = requests.patch(file_endpoint, headers=h, data=data)
+    response = requests.patch(file_endpoint, headers=h,
+                              data=data, verify=should_verify)
     if response.status_code != 204:
-        raise TusError("Upload chunk failed", response=response)
+        e = TusError("Upload chunk failed", response=response)
+        raise e
